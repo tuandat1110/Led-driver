@@ -948,7 +948,6 @@ deps_button_driver.o := \
   /home/tuandat/kernel-source/KERNEL/include/uapi/linux/mei_uuid.h \
   /home/tuandat/kernel-source/KERNEL/include/linux/uuid.h \
   /home/tuandat/kernel-source/KERNEL/include/linux/property.h \
-  /home/tuandat/kernel-source/KERNEL/include/linux/of_device.h \
   /home/tuandat/kernel-source/KERNEL/include/linux/fs.h \
     $(wildcard include/config/FANOTIFY_ACCESS_PERMISSIONS) \
     $(wildcard include/config/READ_ONLY_THP_FOR_FS) \
@@ -1110,11 +1109,6 @@ deps_button_driver.o := \
   /home/tuandat/kernel-source/KERNEL/include/linux/projid.h \
   /home/tuandat/kernel-source/KERNEL/include/uapi/linux/quota.h \
   /home/tuandat/kernel-source/KERNEL/include/linux/cdev.h \
-  /home/tuandat/kernel-source/KERNEL/include/linux/poll.h \
-  /home/tuandat/kernel-source/KERNEL/include/uapi/linux/poll.h \
-  /home/tuandat/kernel-source/KERNEL/arch/arm/include/generated/uapi/asm/poll.h \
-  /home/tuandat/kernel-source/KERNEL/include/uapi/asm-generic/poll.h \
-  /home/tuandat/kernel-source/KERNEL/include/uapi/linux/eventpoll.h \
   bbb_glue.h \
 
 button_driver.o: $(deps_button_driver.o)

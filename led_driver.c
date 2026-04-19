@@ -45,8 +45,7 @@ static int led_release(struct inode *inode, struct file *filp)
     return 0;
 }
 
-static ssize_t led_write(struct file *filp, const char __user *buf,
-                         size_t count, loff_t *ppos)
+static ssize_t led_write(struct file *filp, const char __user *buf, size_t count, loff_t *ppos)
 {
     struct led_dev *ldev = filp->private_data;
     char kbuf[16];

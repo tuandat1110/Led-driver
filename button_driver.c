@@ -3,7 +3,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
 #include <linux/uaccess.h>
@@ -11,86 +10,101 @@
 #include <linux/slab.h>
 #include <linux/jiffies.h>
 #include <linux/wait.h>
-#include <linux/poll.h>
 #include <linux/atomic.h>
 #include "bbb_glue.h"
 
-#define DRIVER_NAME     "bbb-button-driver"
-#define DEVICE_NAME     "button"
-#define DEBOUNCE_MS     200UL
+#define DRIVER_NAME "bbb-button-driver"
+#define DEVICE_NAME "all_buttons"
+#define DEBOUNCE_MS 200UL
 
-struct button_dev {
-    struct gpio_desc  *btn_gpiod;
-    struct cdev        cdev;
-    dev_t              devno;
-    int                irq;
-    int                index;
-    unsigned long      last_jiffies;
-    atomic_t           pressed;
-    wait_queue_head_t  wait;
-    atomic_t           event_ready;
+/* Cấu trúc cho từng nút bấm riêng lẻ */
+struct button_info {
+    struct gpio_desc *gpiod;
+    int irq;
+    int index;
+    unsigned long last_jiffies;
 };
 
-static struct class      *button_class;
-static dev_t              button_devno_base;
-static struct button_dev *btn_devs[MAX_DEVICES];
+struct buttons_priv {
+    struct cdev cdev;
+    dev_t devno;
+    struct button_info *btns;
+    int num_btns;
+    wait_queue_head_t wait;
+    atomic_t event_ready;
+};
+
+static struct buttons_priv *priv_data;
+static struct class *button_class;
 
 extern void glue_handle_button_event(int idx);
 
+/* Interrupt Service Routine */
 static irqreturn_t button_isr(int irq, void *dev_id)
 {
-    struct button_dev *bdev = dev_id;
+    struct button_info *bi = dev_id;
     unsigned long now = jiffies;
     int val;
 
-    if (time_before(now, bdev->last_jiffies + msecs_to_jiffies(DEBOUNCE_MS)))
+    if (time_before(now, bi->last_jiffies + msecs_to_jiffies(DEBOUNCE_MS)))
         return IRQ_HANDLED;
 
-    bdev->last_jiffies = now;
-    val = gpiod_get_value(bdev->btn_gpiod);
+    bi->last_jiffies = now;
+    val = gpiod_get_value(bi->gpiod);
 
     if (val == 1) {
-        pr_info("[BUTTON] BTN%d PRESSED\n", bdev->index);
-        /* Dùng glue_handle_button_event thay vì glue_toggle_led
-         * để tôn trọng mode hiện tại (TOGGLE / BLINK / OFF) */
-        glue_handle_button_event(bdev->index);
+        pr_info("[BUTTON] BTN%d PRESSED\n", bi->index);
+        glue_handle_button_event(bi->index);
     } else {
-        pr_info("[BUTTON] BTN%d RELEASED\n", bdev->index);
+        pr_info("[BUTTON] BTN%d RELEASED\n", bi->index);
     }
 
-    atomic_set(&bdev->event_ready, 1);
-    wake_up_interruptible(&bdev->wait);
+    /* Đánh dấu có sự kiện và đánh thức tiến trình đang read() */
+    atomic_set(&priv_data->event_ready, 1);
+    wake_up_interruptible(&priv_data->wait);
 
     return IRQ_HANDLED;
 }
 
 static int button_open(struct inode *inode, struct file *filp)
 {
-    struct button_dev *bdev =
-        container_of(inode->i_cdev, struct button_dev, cdev);
-    filp->private_data = bdev;
+    filp->private_data = priv_data;
     return 0;
 }
 
-static ssize_t button_read(struct file *filp, char __user *buf,
-                           size_t count, loff_t *ppos)
+static ssize_t button_read(struct file *filp, char __user *buf, size_t count, loff_t *ppos)
 {
-    struct button_dev *bdev = filp->private_data;
-    char tmp[3];
-    int len, val;
+    struct buttons_priv *priv = filp->private_data;
+    char *kbuf;
+    int i, len;
 
     if (*ppos > 0)
         return 0;
 
-    wait_event_interruptible(bdev->wait, atomic_read(&bdev->event_ready));
-    atomic_set(&bdev->event_ready, 0);
+    /* Chờ cho đến khi có nút được nhấn/nhả */
+    if (wait_event_interruptible(priv->wait, atomic_read(&priv->event_ready)))
+        return -ERESTARTSYS;
 
-    val = gpiod_get_value(bdev->btn_gpiod);
-    len = snprintf(tmp, sizeof(tmp), "%d\n", val);
+    atomic_set(&priv->event_ready, 0);
 
-    if (copy_to_user(buf, tmp, len))
+    /* Cấp phát buffer tạm để chứa trạng thái (ví dụ "010\n") */
+    kbuf = kmalloc(priv->num_btns + 2, GFP_KERNEL);
+    if (!kbuf)
+        return -ENOMEM;
+
+    for (i = 0; i < priv->num_btns; i++) {
+        kbuf[i] = gpiod_get_value(priv->btns[i].gpiod) ? '1' : '0';
+    }
+    kbuf[priv->num_btns] = '\n';
+    kbuf[priv->num_btns + 1] = '\0';
+    
+    len = priv->num_btns + 1;
+    if (copy_to_user(buf, kbuf, len)) {
+        kfree(kbuf);
         return -EFAULT;
+    }
 
+    kfree(kbuf);
     *ppos = len;
     return len;
 }
@@ -107,92 +121,62 @@ static int button_probe(struct platform_device *pdev)
 
     num = gpiod_count(&pdev->dev, "button");
     if (num <= 0 || num > MAX_DEVICES) {
-        dev_err(&pdev->dev, "Invalid button-gpios count: %d\n", num);
+        dev_err(&pdev->dev, "Invalid button count: %d\n", num);
         return -EINVAL;
     }
 
-    ret = alloc_chrdev_region(&button_devno_base, 0, num, DEVICE_NAME);
-    if (ret) {
-        dev_err(&pdev->dev, "alloc_chrdev_region failed\n");
-        return ret;
-    }
+    /* 1. Khởi tạo cấu trúc dữ liệu chính */
+    priv_data = devm_kzalloc(&pdev->dev, sizeof(*priv_data), GFP_KERNEL);
+    if (!priv_data) return -ENOMEM;
 
+    priv_data->btns = devm_kcalloc(&pdev->dev, num, sizeof(struct button_info), GFP_KERNEL);
+    if (!priv_data->btns) return -ENOMEM;
+
+    priv_data->num_btns = num;
+    init_waitqueue_head(&priv_data->wait);
+    atomic_set(&priv_data->event_ready, 0);
+
+    /* 2. Đăng ký Device Number (Chỉ 1 cái duy nhất) */
+    ret = alloc_chrdev_region(&priv_data->devno, 0, 1, DEVICE_NAME);
+    if (ret) return ret;
+
+    /* 3. Cấu hình từng GPIO và IRQ */
     for (i = 0; i < num; i++) {
-        btn_devs[i] = devm_kzalloc(&pdev->dev,
-                                   sizeof(*btn_devs[i]), GFP_KERNEL);
-        if (!btn_devs[i]) {
-            ret = -ENOMEM;
-            goto err_chrdev;
+        priv_data->btns[i].index = i;
+        priv_data->btns[i].gpiod = devm_gpiod_get_index(&pdev->dev, "button", i, GPIOD_IN);
+        
+        if (IS_ERR(priv_data->btns[i].gpiod)) {
+            ret = PTR_ERR(priv_data->btns[i].gpiod);
+            goto err_unregister;
         }
 
-        btn_devs[i]->index        = i;
-        btn_devs[i]->devno        = MKDEV(MAJOR(button_devno_base), i);
-        btn_devs[i]->last_jiffies = 0;
-
-        init_waitqueue_head(&btn_devs[i]->wait);
-        atomic_set(&btn_devs[i]->event_ready, 0);
-        atomic_set(&btn_devs[i]->pressed, 0);
-
-        btn_devs[i]->btn_gpiod =
-            devm_gpiod_get_index(&pdev->dev, "button", i, GPIOD_IN);
-        if (IS_ERR(btn_devs[i]->btn_gpiod)) {
-            dev_err(&pdev->dev, "Failed to get button%d gpio\n", i);
-            ret = PTR_ERR(btn_devs[i]->btn_gpiod);
-            goto err_chrdev;
-        }
-
-        btn_devs[i]->irq = gpiod_to_irq(btn_devs[i]->btn_gpiod);
-        if (btn_devs[i]->irq < 0) {
-            dev_err(&pdev->dev, "Failed to get IRQ for button%d\n", i);
-            ret = btn_devs[i]->irq;
-            goto err_chrdev;
-        }
-
-        ret = devm_request_irq(&pdev->dev,
-                               btn_devs[i]->irq,
-                               button_isr,
+        priv_data->btns[i].irq = gpiod_to_irq(priv_data->btns[i].gpiod);
+        ret = devm_request_irq(&pdev->dev, priv_data->btns[i].irq, button_isr,
                                IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
-                               "btn_irq",
-                               btn_devs[i]);
-        if (ret) {
-            dev_err(&pdev->dev, "Failed to request IRQ for button%d\n", i);
-            goto err_chrdev;
-        }
-
-        cdev_init(&btn_devs[i]->cdev, &fops);
-        ret = cdev_add(&btn_devs[i]->cdev, btn_devs[i]->devno, 1);
-        if (ret) {
-            dev_err(&pdev->dev, "cdev_add failed for button%d\n", i);
-            goto err_chrdev;
-        }
-
-        device_create(button_class, NULL,
-                      btn_devs[i]->devno, NULL, "button%d", i);
-
-        dev_info(&pdev->dev, "Button%d ready (irq=%d)\n",
-                 i, btn_devs[i]->irq);
+                               "btn_irq", &priv_data->btns[i]);
+        if (ret) goto err_unregister;
     }
 
-    dev_info(&pdev->dev, "Button driver loaded (%d buttons)\n", num);
+    /* 4. Đăng ký Character Device và Device File */
+    cdev_init(&priv_data->cdev, &fops);
+    ret = cdev_add(&priv_data->cdev, priv_data->devno, 1);
+    if (ret) goto err_unregister;
+
+    device_create(button_class, NULL, priv_data->devno, NULL, DEVICE_NAME);
+
+    dev_info(&pdev->dev, "Driver loaded: 1 device file for %d buttons\n", num);
     return 0;
 
-err_chrdev:
-    unregister_chrdev_region(button_devno_base, num);
+err_unregister:
+    unregister_chrdev_region(priv_data->devno, 1);
     return ret;
 }
 
 static void button_remove(struct platform_device *pdev)
 {
-    int i;
-
-    for (i = 0; i < MAX_DEVICES; i++) {
-        if (!btn_devs[i])
-            continue;
-        device_destroy(button_class, btn_devs[i]->devno);
-        cdev_del(&btn_devs[i]->cdev);
-    }
-
-    unregister_chrdev_region(button_devno_base, MAX_DEVICES);
+    device_destroy(button_class, priv_data->devno);
+    cdev_del(&priv_data->cdev);
+    unregister_chrdev_region(priv_data->devno, 1);
     dev_info(&pdev->dev, "Button driver removed\n");
 }
 
@@ -203,15 +187,15 @@ static const struct of_device_id match[] = {
 MODULE_DEVICE_TABLE(of, match);
 
 static struct platform_driver drv = {
-    .probe  = button_probe,
+    .probe = button_probe,
     .remove = button_remove,
     .driver = {
-        .name           = DRIVER_NAME,
+        .name = DRIVER_NAME,
         .of_match_table = match,
     },
 };
 
-static int __init init(void)
+static int __init button_init(void)
 {
     button_class = class_create("button_class");
     if (IS_ERR(button_class))
@@ -220,16 +204,15 @@ static int __init init(void)
     return platform_driver_register(&drv);
 }
 
-static void __exit exit_f(void)
+static void __exit button_exit(void)
 {
     platform_driver_unregister(&drv);
     class_destroy(button_class);
-    pr_info("[BUTTON] Module unloaded\n");
 }
 
-module_init(init);
-module_exit(exit_f);
+module_init(button_init);
+module_exit(button_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dat");
-MODULE_DESCRIPTION("BBB Button Driver");
+MODULE_DESCRIPTION("BBB Button Driver - Unified Device File");
