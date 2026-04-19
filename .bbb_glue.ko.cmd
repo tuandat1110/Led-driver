@@ -1,0 +1,1 @@
+savedcmd_bbb_glue.ko := /home/tuandat/kernel-source/dl/gcc-15.2.0-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-ld -r -EL -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /home/tuandat/kernel-source/KERNEL/scripts/module.lds -o bbb_glue.ko bbb_glue.o bbb_glue.mod.o .module-common.o
