@@ -17,7 +17,6 @@
 #define DEVICE_NAME "all_buttons"
 #define DEBOUNCE_MS 200UL
 
-/* Cấu trúc cho từng nút bấm riêng lẻ */
 struct button_info {
     struct gpio_desc *gpiod;
     int irq;
@@ -39,13 +38,13 @@ static struct class *button_class;
 
 extern void glue_handle_button_event(int idx);
 
-/* Interrupt Service Routine */
+//ham ngat xu ly khi nut duoc bam
 static irqreturn_t button_isr(int irq, void *dev_id)
 {
     struct button_info *bi = dev_id;
     unsigned long now = jiffies;
     int val;
-
+    // dung debouncing tranh user nhan nut qua nhanh
     if (time_before(now, bi->last_jiffies + msecs_to_jiffies(DEBOUNCE_MS)))
         return IRQ_HANDLED;
 
@@ -54,12 +53,11 @@ static irqreturn_t button_isr(int irq, void *dev_id)
 
     if (val == 1) {
         pr_info("[BUTTON] BTN%d PRESSED\n", bi->index);
-        glue_handle_button_event(bi->index);
+        glue_handle_button_event(bi->index);    //nut duoc bam nhay vao ham nay xu ly
     } else {
         pr_info("[BUTTON] BTN%d RELEASED\n", bi->index);
     }
-
-    /* Đánh dấu có sự kiện và đánh thức tiến trình đang read() */
+    // set co event ready = 1
     atomic_set(&priv_data->event_ready, 1);
     wake_up_interruptible(&priv_data->wait);
 
@@ -71,7 +69,7 @@ static int button_open(struct inode *inode, struct file *filp)
     filp->private_data = priv_data;
     return 0;
 }
-
+// ham read doc trang thai cac button (vi du: 01 ,nghia la button0 dang mo, button1 dang nhan)
 static ssize_t button_read(struct file *filp, char __user *buf, size_t count, loff_t *ppos)
 {
     struct buttons_priv *priv = filp->private_data;
@@ -81,13 +79,11 @@ static ssize_t button_read(struct file *filp, char __user *buf, size_t count, lo
     if (*ppos > 0)
         return 0;
 
-    /* Chờ cho đến khi có nút được nhấn/nhả */
+    // cho cho nut nhan duoc nhan/nha
     if (wait_event_interruptible(priv->wait, atomic_read(&priv->event_ready)))
         return -ERESTARTSYS;
 
     atomic_set(&priv->event_ready, 0);
-
-    /* Cấp phát buffer tạm để chứa trạng thái (ví dụ "010\n") */
     kbuf = kmalloc(priv->num_btns + 2, GFP_KERNEL);
     if (!kbuf)
         return -ENOMEM;
@@ -125,7 +121,6 @@ static int button_probe(struct platform_device *pdev)
         return -EINVAL;
     }
 
-    /* 1. Khởi tạo cấu trúc dữ liệu chính */
     priv_data = devm_kzalloc(&pdev->dev, sizeof(*priv_data), GFP_KERNEL);
     if (!priv_data) return -ENOMEM;
 

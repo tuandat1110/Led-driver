@@ -15,25 +15,19 @@
 #include "bbb_glue_ioctl.h"
 
 #define GLUE_DEVICE_NAME "bbb_glue"
-#define BLINK_DELAY      msecs_to_jiffies(500)
-
-/* Global GPIO array — defined here, declared extern in header */
-struct gpio_desc *led_gpios[MAX_DEVICES];
-EXPORT_SYMBOL_GPL(led_gpios);
+#define BLINK_DELAY msecs_to_jiffies(500)
 
 struct glue_context {
-    enum bbb_mode     modes[MAX_DEVICES];
+    enum bbb_mode modes[MAX_DEVICES];
     struct timer_list blink_timers[MAX_DEVICES];
-    int               blink_state[MAX_DEVICES];
-    struct mutex      lock;
-    dev_t             devno;
-    struct cdev       cdev;
-    struct class     *class;
+    int blink_state[MAX_DEVICES];
+    struct mutex lock;
+    dev_t devno;
+    struct cdev cdev;
+    struct class *class;
 };
 
 static struct glue_context *g_ctx;
-
-/* ================= REGISTRATION ================= */
 
 void glue_register_led(int led_index, struct gpio_desc *gpio)
 {
@@ -74,7 +68,6 @@ void glue_unregister_led(int led_index)
 }
 EXPORT_SYMBOL_GPL(glue_unregister_led);
 
-/* ================= CORE LOGIC ================= */
 
 static void blink_timer_callback(struct timer_list *t)
 {
@@ -157,8 +150,6 @@ void glue_handle_button_event(int idx)
 }
 EXPORT_SYMBOL_GPL(glue_handle_button_event);
 
-/* ================= FILE OPERATIONS ================= */
-
 static long glue_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct bbb_ioctl_data data;
@@ -184,23 +175,23 @@ static long glue_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     gpio = led_gpios[data.index];
 
     switch (data.mode) {
-    case MODE_BLINK:
-        g_ctx->blink_state[data.index] = 0;
-        mutex_unlock(&g_ctx->lock);
-        mod_timer(&g_ctx->blink_timers[data.index], jiffies + BLINK_DELAY);
-        break;
-
-    case MODE_OFF:
-        if (gpio) {
-            gpiod_set_value(gpio, 0);
+        case MODE_BLINK:
             g_ctx->blink_state[data.index] = 0;
-        }
-        mutex_unlock(&g_ctx->lock);
-        break;
+            mutex_unlock(&g_ctx->lock);
+            mod_timer(&g_ctx->blink_timers[data.index], jiffies + BLINK_DELAY);
+            break;
 
-    default: /* MODE_TOGGLE and anything else */
-        mutex_unlock(&g_ctx->lock);
-        break;
+        case MODE_OFF:
+            if (gpio) {
+                gpiod_set_value(gpio, 0);
+                g_ctx->blink_state[data.index] = 0;
+            }
+            mutex_unlock(&g_ctx->lock);
+            break;
+
+        default: /* MODE_TOGGLE and anything else */
+            mutex_unlock(&g_ctx->lock);
+            break;
     }
 
     pr_info("[GLUE] IOCTL: LED%d set to mode %d\n", data.index, data.mode);
@@ -211,8 +202,6 @@ static const struct file_operations glue_fops = {
     .owner          = THIS_MODULE,
     .unlocked_ioctl = glue_ioctl,
 };
-
-/* ================= INIT & EXIT ================= */
 
 static int __init bbb_glue_init(void)
 {

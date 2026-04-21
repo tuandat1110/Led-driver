@@ -12,28 +12,25 @@
 #include <linux/slab.h>
 #include <linux/mutex.h>
 
-#define DRIVER_NAME     "bbb-led-driver"
-#define MAX_LEDS        2
-#define DEVICE_NAME     "led"
+#define DRIVER_NAME "bbb-led-driver"
+#define MAX_LEDS 2
+#define DEVICE_NAME "led"
 
-/* Khai báo extern symbol từ button_driver */
+// khai bao cac ham dang ky, huy dang ky led cho glue module
 extern void glue_register_led(int led_index, struct gpio_desc *gpio);
 extern void glue_unregister_led(int led_index);
 
 struct led_dev {
     struct gpio_desc *gpios[MAX_LEDS];
-    int               num_leds;
-    struct cdev       cdev;
-    dev_t             devno;
-    struct mutex      lock;
+    int num_leds;
+    struct cdev cdev;
+    dev_t devno;
+    struct mutex lock;
 };
 
 static struct class   *led_class;
-///static dev_t           led_devno_base;
 static struct led_dev *global_ldev;
-//static struct led_dev *led_devs[MAX_LEDS];
 
-/* ================= FILE OPS ================= */
 static int led_open(struct inode *inode, struct file *filp)
 {
     filp->private_data = container_of(inode->i_cdev, struct led_dev, cdev);
@@ -201,7 +198,6 @@ static void led_remove(struct platform_device *pdev)
     dev_info(&pdev->dev, "Driver removed successfully\n");
 }
 
-/* ================= MATCH ================= */
 static const struct of_device_id led_of_match[] = {
     { .compatible = "bbb,led-driver" },
     { }
@@ -217,7 +213,6 @@ static struct platform_driver led_platform_driver = {
     },
 };
 
-/* ================= INIT ================= */
 static int __init led_driver_init(void)
 {
     led_class = class_create("led_driver");

@@ -1,0 +1,61 @@
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/am33xx.h>
+
+/ {
+    compatible = "ti,beaglebone", "ti,beaglebone-black";
+
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+
+            my_leds: my_leds {
+                compatible = "bbb,led-driver";
+                status = "okay";
+
+                led-gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>,
+                            <&gpio0 26 GPIO_ACTIVE_HIGH>;
+
+                led-names = "led1", "led2";
+
+                pinctrl-names = "default";
+                pinctrl-0 = <&led_pins>;
+            };
+
+            my_buttons: my_buttons {
+                compatible = "bbb,button-driver";
+                status = "okay";
+
+                button-gpios = <&gpio1 13 GPIO_ACTIVE_LOW>,
+                               <&gpio1 12 GPIO_ACTIVE_LOW>;
+
+                button-names = "btn1", "btn2";
+
+                pinctrl-names = "default";
+                pinctrl-0 = <&button_pins>;
+            };
+        };
+    };
+
+    fragment@1 {
+        target = <&am33xx_pinmux>;
+        __overlay__ {
+
+            led_pins: led_pins {
+                pinctrl-single,pins = <
+                    AM33XX_PADCONF(AM335X_PIN_GPMC_AD9,  PIN_OUTPUT_PULLDOWN, MUX_MODE7)
+                    AM33XX_PADCONF(AM335X_PIN_GPMC_AD10, PIN_OUTPUT_PULLDOWN, MUX_MODE7)
+                >;
+            };
+
+            button_pins: button_pins {
+                pinctrl-single,pins = <
+                    AM33XX_PADCONF(AM335X_PIN_GPMC_AD13, PIN_INPUT_PULLUP, MUX_MODE7)
+                    AM33XX_PADCONF(AM335X_PIN_GPMC_AD12, PIN_INPUT_PULLUP, MUX_MODE7)
+                >;
+            };
+        };
+    };
+};
